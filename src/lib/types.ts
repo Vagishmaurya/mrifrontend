@@ -104,6 +104,115 @@ export interface RentalListingSearchResultSchema {
   match_score: number
 }
 
+// --- MRI Residential Units (`GET /units`) --------------------------------
+
+/** Rent/lease history entry derived from an MRI unit's lease fields. */
+export interface MRIUnitRentHistoryEntry {
+  rent?: number | null
+  /** ISO date-time string. */
+  move_in?: string | null
+  /** ISO date-time string. */
+  move_out?: string | null
+  /** ISO date-time string. */
+  last_update?: string | null
+}
+
+/**
+ * MRI residential unit record from the Residential Units API (`GET /units`).
+ * Numeric MRI fields (bedrooms/bathrooms/square_footage) arrive as strings and
+ * need parsing before use — see the `unit*` helpers in `format.ts`.
+ */
+export interface MRIResidentialUnit {
+  unit_id: string
+  property_id: string
+  building_id?: string | null
+  classification?: string | null
+  unit_kind?: string | null
+  unit_status?: string | null
+  unit_status_code?: string | null
+  unit_description?: string | null
+  building_address?: string | null
+  building_city?: string | null
+  building_state?: string | null
+  building_zip_code?: string | null
+  unit_address?: string | null
+  /** Raw MRI string, e.g. "2" or "E" (efficiency/studio). */
+  bedrooms?: string | null
+  /** Raw MRI string, e.g. "1" or "1H" (1.5 baths). */
+  bathrooms?: string | null
+  /** Raw MRI string, e.g. "1120". */
+  square_footage?: string | null
+  base_rent?: number | null
+  optimum_potential_rent?: number | null
+  security_deposit?: number | null
+  availability_status?: string | null
+  is_available_now?: string | null
+  /** ISO date-time string. */
+  move_in?: string | null
+  /** ISO date-time string. */
+  move_out?: string | null
+  /** ISO date-time string. */
+  last_update?: string | null
+  /** ISO date-time string. */
+  ready_date?: string | null
+  /** ISO date-time string. */
+  make_ready_date?: string | null
+  rent_history?: MRIUnitRentHistoryEntry[]
+}
+
+// --- Optimal rent (`GET /optimal-rent`) ----------------------------------
+
+/** A RentCast comparable used in the optimal-rent calculation. */
+export interface MarketComparableSchema {
+  id: string
+  formatted_address: string
+  bedrooms?: number | null
+  bathrooms?: number | null
+  square_footage?: number | null
+  /** RentCast market rent (monthly, USD). */
+  rent?: number | null
+  /** 0–100. */
+  address_match_score: number
+  /** 0–100. */
+  spec_match_score: number
+}
+
+/** Optimal-rent recommendation for an MRI unit profile (`GET /optimal-rent`). */
+export interface OptimalRentResponse {
+  entity_id: string
+  city: string
+  state: string
+  zip_code: string
+  street?: string | null
+  bedrooms: number
+  bathrooms: number
+  square_footage: number
+  /** Blended recommendation (monthly, USD). */
+  optimal_rent?: number | null
+  /** Median MRI portfolio rent for matching units. */
+  mri_rent_estimate?: number | null
+  /** Weighted RentCast market rent for matching comparables. */
+  market_rent_estimate?: number | null
+  rent_range_min?: number | null
+  rent_range_max?: number | null
+  mri_units: MRIResidentialUnit[]
+  market_comparables: MarketComparableSchema[]
+  mri_unit_count: number
+  market_comp_count: number
+}
+
+/** Query params for `GET /optimal-rent`. */
+export interface OptimalRentQuery {
+  entity_id: string
+  city: string
+  state: string
+  zip_code: string
+  street?: string
+  bedrooms: number
+  bathrooms: number
+  square_footage: number
+}
+
 /** US formatted address for autocomplete (`GET /addresses/autocomplete`). */
 export interface USAddressSchema {
   street: string

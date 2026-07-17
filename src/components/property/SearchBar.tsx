@@ -28,8 +28,14 @@ export function SearchBar({
   const [picked, setPicked] = useState<USAddressSchema | null>(null)
   const boxRef = useRef<HTMLDivElement>(null)
 
-  // Debounced autocomplete against /addresses/autocomplete.
+  // Debounced autocomplete against /addresses/autocomplete. Only rentals search
+  // by address; properties search by name, so no address suggestions there.
   useEffect(() => {
+    if (mode !== "rentals") {
+      setSuggestions([])
+      setOpen(false)
+      return
+    }
     if (picked && picked.formatted_address === value) return
     const q = value.trim()
     if (q.length < 2) {
@@ -45,7 +51,7 @@ export function SearchBar({
         .catch(() => setSuggestions([]))
     }, 200)
     return () => clearTimeout(handle)
-  }, [value, picked])
+  }, [value, picked, mode])
 
   // Close dropdown on outside click.
   useEffect(() => {
@@ -64,15 +70,23 @@ export function SearchBar({
 
   function submit(e: React.FormEvent) {
     e.preventDefault()
-    const isPicked = !!picked && picked.formatted_address === value
     const params = new URLSearchParams()
 
+    if (mode === "properties") {
+      // Properties are searched by entity name (`/properties/by-entity-name`),
+      // not by address — send the raw text as `name`.
+      const q = value.trim()
+      if (q) params.set("name", q)
+      navigate(`/properties?${params.toString()}`)
+      return
+    }
+
+    // Rentals: RentCast matches on a resolvable address, so pass the structured
+    // components of the chosen suggestion (or free text) as street/city/zip.
+    const isPicked = !!picked && picked.formatted_address === value
     if (isPicked && picked) {
-      // Pass the structured components of the chosen suggestion so the backend
-      // can fuzzy-match precisely. Both /rentals and /properties accept
-      // street/city/state/zip_code. Photon returns street === city for bare
-      // place names (e.g. "New York, New York"), so only send `street` when it
-      // is an actual street distinct from the city.
+      // Photon returns street === city for bare place names (e.g. "New York,
+      // New York"), so only send `street` when it is a real, distinct street.
       if (picked.city) params.set("city", picked.city)
       if (picked.state) params.set("state", picked.state)
       if (picked.zip_code) params.set("zip_code", picked.zip_code)
@@ -86,9 +100,7 @@ export function SearchBar({
       }
     }
 
-    // The mode toggle decides the target: /rentals -> getRentals,
-    // /properties -> getProperties. Each page reads these params and calls its API.
-    navigate(`/${mode}?${params.toString()}`)
+    navigate(`/rentals?${params.toString()}`)
   }
 
   return (

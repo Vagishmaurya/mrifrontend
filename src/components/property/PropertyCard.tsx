@@ -1,24 +1,25 @@
 import { Link } from "react-router-dom"
-import { Building2, DoorOpen, MapPin, Maximize } from "lucide-react"
+import { Building2, ChevronRight, MapPin, Maximize } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import {
   entityCityState,
   entityTitle,
-  formatCurrency,
   formatSqft,
   isEntityActive,
 } from "@/lib/format"
 import { entityImage } from "@/lib/images"
-import type { PropertyListing } from "@/lib/types"
+import type { MRIPropertyEntity } from "@/lib/types"
 
-export function PropertyCard({ property }: { property: PropertyListing }) {
+export function PropertyCard({
+  property,
+  matchScore,
+}: {
+  property: MRIPropertyEntity
+  matchScore?: number
+}) {
   const active = isEntityActive(property)
-  const rents = property.units.map((u) => u.mri_rent)
-  const minRent = rents.length ? Math.min(...rents) : null
-  const maxRent = rents.length ? Math.max(...rents) : null
-  const availableCount = property.units.filter((u) => u.status === "Available").length
 
   return (
     <div className="group flex flex-col overflow-hidden rounded-2xl border bg-card transition-all hover:-translate-y-0.5 hover:shadow-lg">
@@ -55,9 +56,16 @@ export function PropertyCard({ property }: { property: PropertyListing }) {
       </div>
 
       <div className="flex flex-1 flex-col p-4">
-        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          <Building2 className="h-3.5 w-3.5" />
-          <span className="font-mono">{property.entity_id}</span>
+        <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+          <span className="flex items-center gap-1.5">
+            <Building2 className="h-3.5 w-3.5" />
+            <span className="font-mono">{property.entity_id}</span>
+          </span>
+          {matchScore != null && matchScore > 0 && (
+            <Badge variant="secondary" className="h-5 px-1.5 text-[10px]">
+              {Math.round(matchScore)}% match
+            </Badge>
+          )}
         </div>
 
         <Link to={`/properties/${property.entity_id}`} className="mt-1">
@@ -72,38 +80,19 @@ export function PropertyCard({ property }: { property: PropertyListing }) {
 
         <div className="mt-3 flex items-center gap-4 border-t pt-3 text-sm text-muted-foreground">
           <span className="flex items-center gap-1.5">
-            <DoorOpen className="h-4 w-4" />
-            {property.units.length} {property.units.length === 1 ? "unit" : "units"}
-          </span>
-          <span className="flex items-center gap-1.5">
             <Maximize className="h-4 w-4" />
             {formatSqft(property.square_feet)}
           </span>
-        </div>
-
-        <div className="mt-3 flex items-end justify-between">
-          <div>
-            <p className="text-xs text-muted-foreground">Rent from</p>
-            <p className="font-semibold">
-              {minRent != null ? formatCurrency(minRent) : "—"}
-              {maxRent != null && maxRent !== minRent && (
-                <span className="text-sm font-normal text-muted-foreground">
-                  {" "}
-                  – {formatCurrency(maxRent)}
-                </span>
-              )}
-              <span className="text-sm font-normal text-muted-foreground">/mo</span>
-            </p>
-          </div>
-          {availableCount > 0 && (
-            <Badge variant="secondary" className="h-6">
-              {availableCount} available
-            </Badge>
+          {property.property_sub_type && (
+            <span className="line-clamp-1">{property.property_sub_type}</span>
           )}
         </div>
 
         <Button asChild variant="outline" className="mt-4">
-          <Link to={`/properties/${property.entity_id}`}>View property</Link>
+          <Link to={`/properties/${property.entity_id}`}>
+            View units &amp; pricing
+            <ChevronRight className="h-4 w-4" />
+          </Link>
         </Button>
       </div>
     </div>

@@ -1,6 +1,9 @@
+import { useMemo } from "react"
 import { Link, useParams } from "react-router-dom"
 import {
   ArrowLeft,
+  Bath,
+  Bed,
   Building2,
   CalendarDays,
   ChevronRight,
@@ -8,17 +11,15 @@ import {
   Hash,
   MapPin,
   Maximize,
-  TrendingDown,
-  TrendingUp,
+  Scale,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
 import { cn } from "@/lib/utils"
-import { getPropertyListingById } from "@/lib/api"
+import { getPropertyById, getUnits, geocodeAddress } from "@/lib/api"
 import { useAsync } from "@/lib/useAsync"
 import { LocationMap } from "@/components/property/LocationMap"
-import { UnitPriceCompareChart } from "@/components/charts/UnitPriceCompareChart"
 import {
   bedsLabel,
   entityAddress,
@@ -27,19 +28,49 @@ import {
   formatDate,
   formatSqft,
   isEntityActive,
+  unitBathrooms,
+  unitBedrooms,
+  unitIsAvailable,
+  unitLabel,
+  unitRent,
+  unitSqft,
 } from "@/lib/format"
 import { entityImage } from "@/lib/images"
-import type { PropertyUnit } from "@/lib/types"
+import type { MRIPropertyEntity, MRIResidentialUnit } from "@/lib/types"
 
-function priceDelta(unit: PropertyUnit) {
-  return unit.rentcast_rent - unit.mri_rent
+/** Build the Compare deep-link for a unit — carries everything `/optimal-rent` needs. */
+function compareHref(entity: MRIPropertyEntity, unit: MRIResidentialUnit): string {
+  const params = new URLSearchParams({
+    entity_id: entity.entity_id,
+    city: entity.city ?? "",
+    state: entity.state ?? "",
+    zip_code: entity.zip_code ?? "",
+    bedrooms: String(unitBedrooms(unit) ?? 0),
+    bathrooms: String(unitBathrooms(unit) ?? 0),
+    square_footage: String(unitSqft(unit) ?? 0),
+    unit: unit.unit_id,
+  })
+  const street = unit.unit_address ?? entity.address1
+  if (street) params.set("street", street)
+  return `/compare?${params.toString()}`
 }
 
 export function PropertyDetail() {
   const { id } = useParams()
-  const { data: property, loading } = useAsync(
-    () => getPropertyListingById(id ?? ""),
-    [id]
+
+  const { data, loading } = useAsync(async () => {
+    const entity = await getPropertyById(id ?? "")
+    if (!entity) return { entity: undefined, units: [] as MRIResidentialUnit[] }
+    const units = await getUnits(entity.entity_id)
+    return { entity, units }
+  }, [id])
+
+  const entity = data?.entity
+  const units = useMemo(() => data?.units ?? [], [data])
+
+  const { data: coords } = useAsync(
+    () => (entity ? geocodeAddress(entityAddress(entity)) : Promise.resolve(null)),
+    [entity?.entity_id]
   )
 
   if (loading) {
@@ -51,7 +82,7 @@ export function PropertyDetail() {
     )
   }
 
-  if (!property) {
+  if (!entity) {
     return (
       <div className="mx-auto flex max-w-md flex-col items-center px-4 py-24 text-center">
         <h1 className="text-2xl font-semibold">Property not found</h1>
@@ -65,24 +96,23 @@ export function PropertyDetail() {
     )
   }
 
-  const active = isEntityActive(property)
-  const units = property.units
-
-  const totalMri = units.reduce((s, u) => s + u.mri_rent, 0)
-  const totalRentcast = units.reduce((s, u) => s + u.rentcast_rent, 0)
-  const totalDelta = totalRentcast - totalMri
+  const active = isEntityActive(entity)
+  const rents = units.map(unitRent).filter((n): n is number => n != null)
+  const minRent = rents.length ? Math.min(...rents) : null
+  const maxRent = rents.length ? Math.max(...rents) : null
+  const availableCount = units.filter(unitIsAvailable).length
 
   const details: [string, string | null | undefined][] = [
-    ["Entity ID", property.entity_id],
-    ["Location ID", property.location_id],
-    ["Entity type", property.entity_type],
-    ["Type description", property.property_type_description],
-    ["Sub-type", property.property_sub_type],
-    ["Property class", property.property_class ? `Class ${property.property_class}` : null],
-    ["Square feet", property.square_feet ? formatSqft(property.square_feet) : null],
-    ["County", property.county],
+    ["Entity ID", entity.entity_id],
+    ["Location ID", entity.location_id],
+    ["Entity type", entity.entity_type],
+    ["Type description", entity.property_type_description],
+    ["Sub-type", entity.property_sub_type],
+    ["Property class", entity.property_class ? `Class ${entity.property_class}` : null],
+    ["Square feet", entity.square_feet ? formatSqft(entity.square_feet) : null],
+    ["County", entity.county],
     ["Units", String(units.length)],
-    ["Last activity", property.last_date ? formatDate(property.last_date) : null],
+    ["Last activity", entity.last_date ? formatDate(entity.last_date) : null],
     ["Status", active ? "Active" : "Inactive"],
   ]
 
@@ -93,26 +123,26 @@ export function PropertyDetail() {
           <ArrowLeft className="h-4 w-4" /> Properties
         </Link>
         <ChevronRight className="h-4 w-4" />
-        <span className="text-foreground">{entityTitle(property)}</span>
+        <span className="text-foreground">{entityTitle(entity)}</span>
       </div>
 
       {/* Hero banner */}
       <div className="relative overflow-hidden rounded-2xl">
         <img
-          src={entityImage(property.entity_id, 1600)}
-          alt={entityTitle(property)}
+          src={entityImage(entity.entity_id, 1600)}
+          alt={entityTitle(entity)}
           className="h-56 w-full object-cover sm:h-72"
         />
         <div className="absolute inset-0 bg-gradient-to-t from-black/70 to-black/10" />
         <div className="absolute bottom-4 left-4 right-4 flex flex-wrap items-end justify-between gap-3 text-white">
           <div>
             <div className="flex flex-wrap items-center gap-2">
-              {property.property_type_description && (
-                <Badge className="shadow">{property.property_type_description}</Badge>
+              {entity.property_type_description && (
+                <Badge className="shadow">{entity.property_type_description}</Badge>
               )}
-              {property.property_class && (
+              {entity.property_class && (
                 <Badge variant="secondary" className="bg-white/90 text-foreground shadow">
-                  Class {property.property_class}
+                  Class {entity.property_class}
                 </Badge>
               )}
               <Badge
@@ -125,11 +155,11 @@ export function PropertyDetail() {
               </Badge>
             </div>
             <h1 className="mt-2 text-2xl font-semibold tracking-tight sm:text-3xl">
-              {entityTitle(property)}
+              {entityTitle(entity)}
             </h1>
             <p className="mt-1 flex items-center gap-1.5 text-sm text-white/85">
               <MapPin className="h-4 w-4" />
-              {entityAddress(property)}
+              {entityAddress(entity)}
             </p>
           </div>
         </div>
@@ -139,9 +169,9 @@ export function PropertyDetail() {
       <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
         {[
           { icon: DoorOpen, label: "Units", value: String(units.length) },
-          { icon: Maximize, label: "Square feet", value: formatSqft(property.square_feet) },
-          { icon: Building2, label: "Type", value: property.property_type_description ?? "—" },
-          { icon: CalendarDays, label: "Last activity", value: formatDate(property.last_date) },
+          { icon: Maximize, label: "Square feet", value: formatSqft(entity.square_feet) },
+          { icon: Building2, label: "Type", value: entity.property_type_description ?? "—" },
+          { icon: CalendarDays, label: "Last activity", value: formatDate(entity.last_date) },
         ].map((s) => (
           <div key={s.label} className="rounded-xl border bg-card p-4">
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -163,91 +193,85 @@ export function PropertyDetail() {
               <Badge variant="secondary" className="ml-1">{units.length}</Badge>
             </div>
             <p className="mt-1 text-sm text-muted-foreground">
-              Each unit’s details, MRI book rent, and the RentCast market estimate.
+              Each unit’s details and MRI rent. Hit <strong>Compare</strong> to see
+              the live RentCast market rent and the recommended optimal rent.
             </p>
 
-            <div className="mt-4 overflow-x-auto">
-              <table className="w-full min-w-[640px] text-sm">
-                <thead className="text-left text-xs uppercase tracking-wide text-muted-foreground">
-                  <tr className="border-b">
-                    <th className="py-2 pr-3 font-medium">Unit</th>
-                    <th className="py-2 pr-3 font-medium">Beds / Baths</th>
-                    <th className="py-2 pr-3 font-medium">Size</th>
-                    <th className="py-2 pr-3 text-right font-medium">MRI rent</th>
-                    <th className="py-2 pr-3 text-right font-medium">RentCast est.</th>
-                    <th className="py-2 pr-3 text-right font-medium">Difference</th>
-                    <th className="py-2 font-medium">Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {units.map((u) => {
-                    const delta = priceDelta(u)
-                    return (
-                      <tr key={u.id} className="border-b last:border-0">
-                        <td className="py-3 pr-3">
-                          <div className="font-medium">{u.name}</div>
-                          <div className="text-xs text-muted-foreground">{u.unit_type}</div>
-                        </td>
-                        <td className="py-3 pr-3 text-muted-foreground">
-                          {bedsLabel(u.bedrooms)} · {u.bathrooms} ba
-                        </td>
-                        <td className="py-3 pr-3 text-muted-foreground">
-                          {formatSqft(u.square_footage)}
-                        </td>
-                        <td className="py-3 pr-3 text-right font-mono tabular-nums">
-                          {formatCurrency(u.mri_rent)}
-                        </td>
-                        <td className="py-3 pr-3 text-right font-mono tabular-nums">
-                          {formatCurrency(u.rentcast_rent)}
-                        </td>
-                        <td className="py-3 pr-3 text-right">
-                          <span
-                            className={cn(
-                              "inline-flex items-center gap-1 font-mono tabular-nums",
-                              delta > 0 ? "text-emerald-600" : delta < 0 ? "text-rose-600" : "text-muted-foreground"
-                            )}
-                          >
-                            {delta > 0 ? (
-                              <TrendingUp className="h-3.5 w-3.5" />
-                            ) : delta < 0 ? (
-                              <TrendingDown className="h-3.5 w-3.5" />
-                            ) : null}
-                            {delta === 0 ? "—" : `${delta > 0 ? "+" : "−"}${formatCurrency(Math.abs(delta))}`}
-                          </span>
-                        </td>
-                        <td className="py-3">
-                          <Badge
-                            variant="outline"
-                            className={cn(
-                              "border-transparent",
-                              u.status === "Available"
-                                ? "bg-emerald-600/10 text-emerald-700 dark:text-emerald-400"
-                                : "bg-muted text-muted-foreground"
-                            )}
-                          >
-                            {u.status}
-                          </Badge>
-                        </td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </section>
-
-          {/* Price comparison */}
-          <section className="rounded-2xl border bg-card p-6">
-            <h2 className="text-lg font-semibold">MRI vs RentCast pricing</h2>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Portfolio book rent compared with live RentCast market estimates, per unit.
-            </p>
-            <div className="mt-4 rounded-xl border bg-background p-4">
-              <UnitPriceCompareChart
-                units={units}
-                className="aspect-auto h-[320px] w-full"
-              />
-            </div>
+            {units.length === 0 ? (
+              <div className="mt-4 rounded-xl border border-dashed p-8 text-center text-sm text-muted-foreground">
+                No residential units are listed for this property in MRI.
+              </div>
+            ) : (
+              <div className="mt-4 overflow-x-auto">
+                <table className="w-full min-w-[680px] text-sm">
+                  <thead className="text-left text-xs uppercase tracking-wide text-muted-foreground">
+                    <tr className="border-b">
+                      <th className="py-2 pr-3 font-medium">Unit</th>
+                      <th className="py-2 pr-3 font-medium">Beds / Baths</th>
+                      <th className="py-2 pr-3 font-medium">Size</th>
+                      <th className="py-2 pr-3 text-right font-medium">MRI rent</th>
+                      <th className="py-2 pr-3 font-medium">Status</th>
+                      <th className="py-2 text-right font-medium">Compare</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {units.map((u) => {
+                      const beds = unitBedrooms(u)
+                      const baths = unitBathrooms(u)
+                      const available = unitIsAvailable(u)
+                      return (
+                        <tr key={u.unit_id} className="border-b last:border-0">
+                          <td className="py-3 pr-3">
+                            <div className="font-medium">{unitLabel(u)}</div>
+                            <div className="text-xs text-muted-foreground">
+                              {u.unit_kind ?? u.classification ?? u.unit_id}
+                            </div>
+                          </td>
+                          <td className="py-3 pr-3 text-muted-foreground">
+                            <span className="inline-flex items-center gap-1">
+                              <Bed className="h-3.5 w-3.5" />
+                              {beds == null ? "—" : bedsLabel(beds)}
+                            </span>
+                            <span className="mx-1.5">·</span>
+                            <span className="inline-flex items-center gap-1">
+                              <Bath className="h-3.5 w-3.5" />
+                              {baths ?? "—"}
+                            </span>
+                          </td>
+                          <td className="py-3 pr-3 text-muted-foreground">
+                            {formatSqft(unitSqft(u))}
+                          </td>
+                          <td className="py-3 pr-3 text-right font-mono tabular-nums">
+                            {formatCurrency(unitRent(u))}
+                          </td>
+                          <td className="py-3 pr-3">
+                            <Badge
+                              variant="outline"
+                              className={cn(
+                                "border-transparent",
+                                available
+                                  ? "bg-emerald-600/10 text-emerald-700 dark:text-emerald-400"
+                                  : "bg-muted text-muted-foreground"
+                              )}
+                            >
+                              {available ? "Available" : u.unit_status ?? "Occupied"}
+                            </Badge>
+                          </td>
+                          <td className="py-3 text-right">
+                            <Button asChild size="sm" className="gap-1">
+                              <Link to={compareHref(entity, u)}>
+                                <Scale className="h-3.5 w-3.5" />
+                                Compare
+                              </Link>
+                            </Button>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </section>
 
           {/* Property details */}
@@ -270,37 +294,25 @@ export function PropertyDetail() {
         <aside>
           <div className="sticky top-20 space-y-4">
             <div className="rounded-2xl border bg-card p-5 shadow-sm">
-              <p className="text-sm text-muted-foreground">Total monthly rent (all units)</p>
+              <p className="text-sm text-muted-foreground">MRI rent range (per unit)</p>
               <p className="text-3xl font-semibold tracking-tight">
-                {formatCurrency(totalMri)}
+                {minRent != null ? formatCurrency(minRent) : "—"}
+                {maxRent != null && maxRent !== minRent && (
+                  <span className="text-lg font-normal text-muted-foreground">
+                    {" – "}
+                    {formatCurrency(maxRent)}
+                  </span>
+                )}
                 <span className="text-base font-normal text-muted-foreground">/mo</span>
               </p>
               <dl className="mt-4 space-y-2 border-t pt-4 text-sm">
                 <div className="flex justify-between">
-                  <dt className="text-muted-foreground">MRI portfolio total</dt>
-                  <dd className="font-medium tabular-nums">{formatCurrency(totalMri)}</dd>
+                  <dt className="text-muted-foreground">Total units</dt>
+                  <dd className="font-medium tabular-nums">{units.length}</dd>
                 </div>
                 <div className="flex justify-between">
-                  <dt className="text-muted-foreground">RentCast market total</dt>
-                  <dd className="font-medium tabular-nums">{formatCurrency(totalRentcast)}</dd>
-                </div>
-                <div className="flex justify-between">
-                  <dt className="text-muted-foreground">Market vs book</dt>
-                  <dd
-                    className={cn(
-                      "inline-flex items-center gap-1 font-medium tabular-nums",
-                      totalDelta > 0 ? "text-emerald-600" : totalDelta < 0 ? "text-rose-600" : ""
-                    )}
-                  >
-                    {totalDelta > 0 ? (
-                      <TrendingUp className="h-3.5 w-3.5" />
-                    ) : totalDelta < 0 ? (
-                      <TrendingDown className="h-3.5 w-3.5" />
-                    ) : null}
-                    {totalDelta === 0
-                      ? "—"
-                      : `${totalDelta > 0 ? "+" : "−"}${formatCurrency(Math.abs(totalDelta))}/mo`}
-                  </dd>
+                  <dt className="text-muted-foreground">Available now</dt>
+                  <dd className="font-medium tabular-nums">{availableCount}</dd>
                 </div>
               </dl>
             </div>
@@ -310,21 +322,27 @@ export function PropertyDetail() {
                 <MapPin className="h-4 w-4 text-primary" />
                 <span className="font-medium">Location</span>
               </div>
-              <LocationMap
-                markers={[
-                  {
-                    id: property.entity_id,
-                    lat: property.latitude,
-                    lng: property.longitude,
-                    label: entityTitle(property),
-                    sub: entityAddress(property),
-                  },
-                ]}
-                className="h-56 w-full"
-              />
+              {coords ? (
+                <LocationMap
+                  markers={[
+                    {
+                      id: entity.entity_id,
+                      lat: coords.lat,
+                      lng: coords.lng,
+                      label: entityTitle(entity),
+                      sub: entityAddress(entity),
+                    },
+                  ]}
+                  className="h-56 w-full"
+                />
+              ) : (
+                <div className="flex h-56 w-full items-center justify-center rounded-xl border border-dashed text-sm text-muted-foreground">
+                  Locating…
+                </div>
+              )}
               <p className="mt-3 flex items-start gap-1.5 text-sm text-muted-foreground">
                 <Hash className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                {entityAddress(property)}
+                {entityAddress(entity)}
               </p>
             </div>
           </div>

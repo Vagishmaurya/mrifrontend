@@ -6,6 +6,9 @@ import type {
   AddressAutocompleteResponse,
   ListQuery,
   MRIPropertyEntity,
+  MRIResidentialUnit,
+  OptimalRentQuery,
+  OptimalRentResponse,
   PaginatedResponseSchema,
   PropertiesResponse,
   PropertySearchResultSchema,
@@ -95,6 +98,61 @@ const rentalById = new Map<string, RentalListingSchema>()
 
 // --- Properties ----------------------------------------------------------
 
+/**
+ * List the entire MRI portfolio, paginated. Backs the Properties page's
+ * default (no-search) view — no location required (`GET /properties/all`).
+ */
+export async function getAllProperties(
+  page = 1,
+  pageSize = 20
+): Promise<PaginatedResponseSchema<MRIPropertyEntity>> {
+  let res: PaginatedResponseSchema<MRIPropertyEntity>
+  if (!USING_MOCK) {
+    res = await httpGet<PaginatedResponseSchema<MRIPropertyEntity>>(
+      `/properties/all${buildQuery({ page, page_size: pageSize })}`
+    )
+  } else {
+    res = await delay(paginate(mockEntities, page, pageSize))
+  }
+  res.items.forEach((e) => entityById.set(e.entity_id, e))
+  return res
+}
+
+/**
+ * Search the portfolio by entity name, best match first
+ * (`GET /properties/by-entity-name`).
+ */
+export async function getPropertiesByName(
+  entityName: string,
+  page = 1,
+  pageSize = 20
+): Promise<PaginatedResponseSchema<PropertySearchResultSchema>> {
+  let res: PaginatedResponseSchema<PropertySearchResultSchema>
+  if (!USING_MOCK) {
+    res = await httpGet<PaginatedResponseSchema<PropertySearchResultSchema>>(
+      `/properties/by-entity-name${buildQuery({
+        entity_name: entityName,
+        page,
+        page_size: pageSize,
+      })}`
+    )
+  } else {
+    const scored: PropertySearchResultSchema[] = mockEntities
+      .map((entity) => ({
+        entity,
+        match_score: fuzzyScore(entityName, entity.entity_name ?? ""),
+      }))
+      .sort((a, b) => b.match_score - a.match_score)
+    res = await delay(paginate(scored, page, pageSize))
+  }
+  res.items.forEach((i) => entityById.set(i.entity.entity_id, i.entity))
+  return res
+}
+
+/**
+ * Search properties by address fields (`GET /properties`). Requires
+ * city+state+zip because that endpoint fuzzy-ranks against a full address.
+ */
 export async function getProperties(query: ListQuery = {}): Promise<PropertiesResponse> {
   const page = query.page ?? 1
   const pageSize = query.page_size ?? 20
@@ -133,20 +191,131 @@ export async function getPropertyById(id: string): Promise<MRIPropertyEntity | u
   if (entityById.has(id)) return entityById.get(id)
 
   if (!USING_MOCK) {
-    // Entity ids are opaque (not address-derivable), and there is no by-id
-    // route, so on a cold/direct load we scan pages until we find it.
-    for (let page = 1; page <= 6; page++) {
-      const res = (await getProperties({
-        page,
-        page_size: 100,
-      })) as PaginatedResponseSchema<MRIPropertyEntity | PropertySearchResultSchema>
-      const hit = res.items.map(toEntity).find((e) => e.entity_id === id)
+    // Entity ids are opaque and there is no by-id route, so on a cold/direct
+    // load we page through the full portfolio (`/properties/all`) to find it.
+    for (let page = 1; page <= 20; page++) {
+      const res = await getAllProperties(page, 100)
+      const hit = res.items.find((e) => e.entity_id === id)
       if (hit) return hit
       if (page >= res.total_pages) break
     }
     return undefined
   }
   return mockEntities.find((e) => e.entity_id === id)
+}
+
+// --- Residential units (`GET /units`) ------------------------------------
+
+/** Fetch the residential units for an MRI property entity. */
+export async function getUnits(entityId: string): Promise<MRIResidentialUnit[]> {
+  if (!entityId) return []
+
+  if (!USING_MOCK) {
+    return httpGet<MRIResidentialUnit[]>(
+      `/units${buildQuery({ entity_id: entityId })}`
+    )
+  }
+
+  // Mock fallback: synthesize units from the mock property's unit mix so the
+  // detail page still renders standalone.
+  const property = mockProperties.find((p) => p.entity_id === entityId)
+  if (!property) return delay([])
+  const units: MRIResidentialUnit[] = property.units.map((u) => ({
+    unit_id: u.id,
+    property_id: entityId,
+    unit_description: u.name,
+    unit_kind: u.unit_type,
+    unit_status: u.status,
+    availability_status: u.status,
+    is_available_now: u.status === "Available" ? "Y" : "N",
+    unit_address: property.address1 ?? null,
+    building_city: property.city ?? null,
+    building_state: property.state ?? null,
+    building_zip_code: property.zip_code ?? null,
+    bedrooms: String(u.bedrooms),
+    bathrooms: String(u.bathrooms),
+    square_footage: String(u.square_footage),
+    base_rent: u.mri_rent,
+    optimum_potential_rent: u.mri_rent,
+    security_deposit: null,
+    rent_history: [],
+  }))
+  return delay(units)
+}
+
+// --- Optimal rent (`GET /optimal-rent`) ----------------------------------
+
+/**
+ * Compute the optimal rent for a specific unit profile — blends the MRI
+ * portfolio rent with live RentCast market comparables. Powers the Compare page.
+ */
+export async function getOptimalRent(
+  query: OptimalRentQuery
+): Promise<OptimalRentResponse> {
+  if (!USING_MOCK) {
+    return httpGet<OptimalRentResponse>(
+      `/optimal-rent${buildQuery({
+        entity_id: query.entity_id,
+        city: query.city,
+        state: query.state,
+        zip_code: query.zip_code,
+        street: query.street,
+        bedrooms: query.bedrooms,
+        bathrooms: query.bathrooms,
+        square_footage: query.square_footage,
+      })}`
+    )
+  }
+
+  // Mock fallback: derive a plausible optimal rent from the matching mock unit
+  // and a comparable RentCast listing in the same ZIP.
+  const property = mockProperties.find((p) => p.entity_id === query.entity_id)
+  const unit = property?.units.find(
+    (u) => u.bedrooms === query.bedrooms && u.square_footage === query.square_footage
+  )
+  const mriRent = unit?.mri_rent ?? null
+  const comp = mockRentals.find(
+    (r) => r.zip_code.trim() === query.zip_code.trim() && (r.bedrooms ?? -1) === query.bedrooms
+  )
+  const marketRent = comp?.price ?? (mriRent != null ? Math.round(mriRent * 1.05) : null)
+  const optimal =
+    marketRent != null && mriRent != null
+      ? Math.round(marketRent * 0.55 + mriRent * 0.45)
+      : (marketRent ?? mriRent)
+  const rents = [mriRent, marketRent].filter((n): n is number => n != null)
+
+  return delay({
+    entity_id: query.entity_id,
+    city: query.city,
+    state: query.state,
+    zip_code: query.zip_code,
+    street: query.street ?? null,
+    bedrooms: query.bedrooms,
+    bathrooms: query.bathrooms,
+    square_footage: query.square_footage,
+    optimal_rent: optimal,
+    mri_rent_estimate: mriRent,
+    market_rent_estimate: marketRent,
+    rent_range_min: rents.length ? Math.min(...rents) : null,
+    rent_range_max: rents.length ? Math.max(...rents) : null,
+    mri_units: [],
+    market_comparables: comp
+      ? [
+          {
+            id: comp.id,
+            formatted_address: comp.formatted_address,
+            bedrooms: comp.bedrooms ?? null,
+            bathrooms: comp.bathrooms ?? null,
+            square_footage: comp.square_footage ?? null,
+            rent: comp.price ?? null,
+            address_match_score: 100,
+            spec_match_score: 100,
+          },
+        ]
+      : [],
+    mri_unit_count: unit ? 1 : 0,
+    market_comp_count: comp ? 1 : 0,
+  })
 }
 
 // --- Property listings (properties + units) ------------------------------
@@ -175,9 +344,11 @@ export async function getPropertyListingById(
 
 // --- Rentals -------------------------------------------------------------
 
-// RentCast needs a location — `/rentals` 400s with no filter and 500s on
-// state-only. For "browse" calls with no city/street we fall back to this city.
+// RentCast needs a full location — `/rentals` requires city+state+zip. For
+// "browse" calls with no locality at all we fall back to this default so the
+// page shows something instead of a 422.
 export const DEFAULT_RENTAL_CITY = "Austin"
+const DEFAULT_RENTAL_LOCATION = { city: "Austin", state: "TX", zip_code: "78701" }
 
 export async function getRentals(query: ListQuery = {}): Promise<RentalsResponse> {
   const page = query.page ?? 1
@@ -186,7 +357,13 @@ export async function getRentals(query: ListQuery = {}): Promise<RentalsResponse
 
   if (!USING_MOCK) {
     const q = { ...query }
-    if (!q.street?.trim() && !q.city?.trim()) q.city = DEFAULT_RENTAL_CITY
+    // The endpoint requires city+state+zip. If the caller supplied none of the
+    // locality fields, seed the default so browsing works out of the box.
+    if (!q.street?.trim() && !q.city?.trim() && !q.zip_code?.trim()) {
+      q.city = DEFAULT_RENTAL_LOCATION.city
+      q.state = DEFAULT_RENTAL_LOCATION.state
+      q.zip_code = DEFAULT_RENTAL_LOCATION.zip_code
+    }
     res = await httpGet<RentalsResponse>(
       `/rentals${buildQuery({ ...q, page, page_size: pageSize })}`
     )

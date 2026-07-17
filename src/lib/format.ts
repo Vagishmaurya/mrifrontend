@@ -1,5 +1,9 @@
 // Presentation helpers shared across the app.
-import type { MRIPropertyEntity, RentalListingSchema } from "./types"
+import type {
+  MRIPropertyEntity,
+  MRIResidentialUnit,
+  RentalListingSchema,
+} from "./types"
 
 export function formatCurrency(value?: number | null): string {
   if (value == null) return "—"
@@ -61,6 +65,64 @@ export function isEntityActive(e: MRIPropertyEntity): boolean {
 export function bedsLabel(beds?: number | null): string {
   if (beds == null) return "—"
   return beds === 0 ? "Studio" : `${beds} bd`
+}
+
+// --- MRI residential unit helpers ----------------------------------------
+// MRI returns bedrooms/bathrooms/square_footage as raw strings; these parse
+// them exactly as the backend does so the values we send to `/optimal-rent`
+// round-trip correctly.
+
+/** Parse an MRI bedroom string ("E" = efficiency/studio → 0). */
+export function unitBedrooms(unit: MRIResidentialUnit): number | null {
+  const v = unit.bedrooms?.trim()
+  if (!v) return null
+  if (v.toUpperCase() === "E") return 0
+  const n = Number.parseFloat(v)
+  return Number.isFinite(n) ? Math.trunc(n) : null
+}
+
+/** Parse an MRI bathroom string ("1H" = 1.5 baths). */
+export function unitBathrooms(unit: MRIResidentialUnit): number | null {
+  const v = unit.bathrooms?.trim().toUpperCase()
+  if (!v) return null
+  if (v.endsWith("H")) {
+    const n = Number.parseFloat(v.slice(0, -1))
+    return Number.isFinite(n) ? n + 0.5 : null
+  }
+  const n = Number.parseFloat(v)
+  return Number.isFinite(n) ? n : null
+}
+
+/** Parse an MRI square-footage string. */
+export function unitSqft(unit: MRIResidentialUnit): number | null {
+  const v = unit.square_footage?.trim()
+  if (!v) return null
+  const n = Number.parseFloat(v)
+  return Number.isFinite(n) && n > 0 ? Math.trunc(n) : null
+}
+
+/** The unit's MRI rent — optimum potential rent, falling back to base rent. */
+export function unitRent(unit: MRIResidentialUnit): number | null {
+  return unit.optimum_potential_rent ?? unit.base_rent ?? null
+}
+
+/** A human label for a unit. */
+export function unitLabel(unit: MRIResidentialUnit): string {
+  return (
+    unit.unit_description?.trim() ||
+    unit.unit_address?.trim() ||
+    `Unit ${unit.unit_id}`
+  )
+}
+
+/** True when a unit reads as currently available. */
+export function unitIsAvailable(unit: MRIResidentialUnit): boolean {
+  const now = (unit.is_available_now ?? "").toString().trim().toLowerCase()
+  if (now === "y" || now === "yes" || now === "true" || now === "1") return true
+  const status = (unit.availability_status ?? unit.unit_status ?? "")
+    .toString()
+    .toLowerCase()
+  return status.includes("available") || status.includes("vacant")
 }
 
 /** Sorted price-history points for a rental, oldest → newest. */
